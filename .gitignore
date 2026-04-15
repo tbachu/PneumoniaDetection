@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local data and generated outputs
+data/
+artifacts/
+
+# macOS
+.DS_Store
