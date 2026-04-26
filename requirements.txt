@@ -8,3 +8,4 @@ uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
 httpx>=0.27.0
 kagglehub>=0.3.0
+scikit-learn>=1.4.0

@@ -1,0 +1,24 @@
+{
+  "temperature": 1.428419,
+  "metrics": {
+    "sensitivity": 0.9718,
+    "specificity": 0.8632,
+    "ppv": 0.9221,
+    "npv": 0.9484,
+    "auc_roc": 0.977,
+    "f1": 0.9463,
+    "precision": 0.9221,
+    "recall": 0.9718,
+    "threshold": 0.5,
+    "tp": 379,
+    "tn": 202,
+    "fp": 32,
+    "fn": 11
+  },
+  "checkpoint": "/Users/tanis/Documents/PneumoniaDetection/artifacts/improved_resnet18.pt",
+  "model_name": "resnet18",
+  "class_names": [
+    "NORMAL",
+    "PNEUMONIA"
+  ]
+}
