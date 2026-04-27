@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a small grid search over lr and weight decay before final training.",
     )
     parser.add_argument("--tune-epochs", type=int, default=2, help="Epochs per tuning trial.")
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="Run clinical evaluation (calibration + metrics + plots) after training.",
+    )
     return parser
 
 
@@ -156,6 +161,59 @@ def main() -> None:
     )
 
     print(f"Saved checkpoint: {output_path.resolve()}")
+
+    # --- Optional: auto-run calibration + clinical evaluation --------------
+    if args.eval:
+        print("\n" + "=" * 60)
+        print("Running post-training calibration and clinical evaluation...")
+        print("=" * 60 + "\n")
+
+        from calibrate import _collect_predictions, _compute_clinical_metrics
+        from clinical_engine import ClinicalAnalyzer
+        from clinical_eval import run_evaluation
+
+        # Calibrate temperature
+        analyzer = ClinicalAnalyzer(
+            model=result["model"],
+            model_name=config.model_name,
+            class_names=result["class_names"],
+            image_size=config.image_size,
+            device=result["device"],
+        )
+
+        loaders, _ = make_dataloaders(
+            data_root=config.data_root,
+            image_size=config.image_size,
+            batch_size=config.batch_size,
+            augment=False,
+            num_workers=config.num_workers,
+        )
+        temperature = analyzer.calibrate(loaders["val"])
+
+        pneumonia_index = (
+            result["class_names"].index("PNEUMONIA")
+            if "PNEUMONIA" in result["class_names"]
+            else 1
+        )
+        labels, preds, probs = _collect_predictions(
+            result["model"], loaders["test"], result["device"], pneumonia_index,
+        )
+        metrics = _compute_clinical_metrics(labels, preds, probs, pneumonia_index)
+        analyzer.clinical_metrics = metrics
+        analyzer.save_calibration(
+            output_path.with_name(output_path.stem + "_calibration.json")
+        )
+        print(f"Temperature: {temperature:.4f}")
+
+        # Full clinical evaluation with plots
+        run_evaluation(
+            checkpoint_path=output_path,
+            data_dir=config.data_root,
+            output_dir=str(output_path.parent / "clinical_eval"),
+            device=config.device,
+            batch_size=config.batch_size,
+            num_workers=config.num_workers,
+        )
 
 
 if __name__ == "__main__":

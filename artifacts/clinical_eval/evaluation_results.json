@@ -1,0 +1,80 @@
+{
+  "roc": {
+    "auc_roc": 0.977,
+    "optimal_threshold": 0.718,
+    "optimal_sensitivity": 0.9333,
+    "optimal_specificity": 0.9274
+  },
+  "precision_recall": {
+    "average_precision": 0.985,
+    "prevalence": 0.625
+  },
+  "confusion_matrix": {
+    "tp": 379,
+    "tn": 202,
+    "fp": 32,
+    "fn": 11
+  },
+  "calibration": {
+    "ece": 0.0246
+  },
+  "operating_points": {
+    "screening": {
+      "threshold": 0.6157,
+      "sensitivity": 0.9513,
+      "specificity": 0.8974
+    },
+    "balanced": {
+      "threshold": 0.7142,
+      "sensitivity": 0.9333,
+      "specificity": 0.9274
+    },
+    "confirmation": {
+      "threshold": 0.8078,
+      "sensitivity": 0.8821,
+      "specificity": 0.953
+    }
+  },
+  "bootstrap": {
+    "sensitivity": {
+      "mean": 0.9718,
+      "std": 0.008,
+      "ci_lower": 0.9555,
+      "ci_upper": 0.987
+    },
+    "specificity": {
+      "mean": 0.8633,
+      "std": 0.0228,
+      "ci_lower": 0.8178,
+      "ci_upper": 0.9054
+    },
+    "ppv": {
+      "mean": 0.9221,
+      "std": 0.0132,
+      "ci_lower": 0.8945,
+      "ci_upper": 0.9464
+    },
+    "npv": {
+      "mean": 0.9486,
+      "std": 0.0144,
+      "ci_lower": 0.919,
+      "ci_upper": 0.976
+    },
+    "f1": {
+      "mean": 0.9463,
+      "std": 0.008,
+      "ci_lower": 0.9288,
+      "ci_upper": 0.9617
+    },
+    "accuracy": {
+      "mean": 0.9311,
+      "std": 0.0099,
+      "ci_lower": 0.9103,
+      "ci_upper": 0.9503
+    }
+  },
+  "checkpoint": "/Users/tanis/Documents/PneumoniaDetection/artifacts/improved_resnet18.pt",
+  "n_samples": 624,
+  "n_pneumonia": 390,
+  "n_normal": 234
+}

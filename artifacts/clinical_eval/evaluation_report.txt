@@ -1,0 +1,39 @@
+=================================================================
+         CLINICAL EVALUATION REPORT
+         Pneumonia Detection Model
+=================================================================
+
+─── OVERALL PERFORMANCE ───────────────────────────────────────
+  AUC-ROC:              0.9770
+  Average Precision:    0.9850
+  Calibration ECE:      0.0246
+  Disease Prevalence:   62.5%
+
+─── CONFUSION MATRIX (threshold=0.50) ────────────────────────
+  True Positives:     379    False Positives:     32
+  True Negatives:     202    False Negatives:     11
+
+─── METRICS WITH 95% CONFIDENCE INTERVALS ────────────────────
+  SENSITIVITY      97.2%  (95% CI: 95.5% – 98.7%)
+  SPECIFICITY      86.3%  (95% CI: 81.8% – 90.5%)
+  PPV              92.2%  (95% CI: 89.5% – 94.6%)
+  NPV              94.9%  (95% CI: 91.9% – 97.6%)
+  F1               94.6%  (95% CI: 92.9% – 96.2%)
+  ACCURACY         93.1%  (95% CI: 91.0% – 95.0%)
+
+─── OPERATING POINTS ──────────────────────────────────────────
+  SCREENING    (high sensitivity):  t=0.62  sens=95.1%  spec=89.7%
+  BALANCED     (Youden's J):        t=0.71  sens=93.3%  spec=92.7%
+  CONFIRMATION (high specificity):  t=0.81  sens=88.2%  spec=95.3%
+
+  Optimal threshold (ROC): 0.72  sens=93.3%  spec=92.7%
+
+─── GENERATED PLOTS ───────────────────────────────────────────
+  • roc_curve.png              — ROC with AUC and operating points
+  • precision_recall_curve.png  — PR curve with Average Precision
+  • confusion_matrix.png        — Heatmap with counts and percentages
+  • calibration_curve.png       — Reliability diagram + distribution
+  • confidence_distribution.png — Probability histograms per class
+  • operating_points.png        — Sensitivity/Specificity trade-off
+
+═════════════════════════════════════════════════════════════════
