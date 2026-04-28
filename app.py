@@ -5,6 +5,8 @@ from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from clinical_engine import ClinicalAnalyzer
@@ -19,6 +21,17 @@ from modeling import (
 from report_generator import analysis_to_dict, generate_report
 
 app = FastAPI(title="Chest X-Ray Clinical Analysis API", version="2.0.0")
+
+# Serve the clinician dashboard
+_dashboard_dir = Path(__file__).resolve().parent / "dashboard"
+if _dashboard_dir.is_dir():
+    app.mount("/dashboard", StaticFiles(directory=str(_dashboard_dir), html=True), name="dashboard")
+
+
+@app.get("/")
+def root_redirect():
+    """Redirect root to clinician dashboard."""
+    return RedirectResponse(url="/dashboard/index.html")
 
 
 @app.on_event("startup")
