@@ -136,6 +136,7 @@
         loadingSection.style.display = "none";
         resultsSection.style.display = "";
 
+        const isMultilabel = data.task === "multilabel";
         const sev = data.severity;
         const unc = data.uncertainty;
         const reg = data.regions;
@@ -168,9 +169,15 @@
         });
 
         // Metrics cards
-        const pProb = data.pneumonia_probability;
-        $("#metric-pneumonia-prob").textContent = (pProb * 100).toFixed(1) + "%";
-        $("#bar-pneumonia").style.width = (pProb * 100) + "%";
+        const pProb = data.pneumonia_probability || 0;
+        if (isMultilabel) {
+            const nPos = data.positive_findings ? data.positive_findings.length : 0;
+            $("#metric-pneumonia-prob").textContent = `${nPos} / ${data.findings.length}`;
+            $("#bar-pneumonia").style.width = (nPos / data.findings.length * 100) + "%";
+        } else {
+            $("#metric-pneumonia-prob").textContent = (pProb * 100).toFixed(1) + "%";
+            $("#bar-pneumonia").style.width = (pProb * 100) + "%";
+        }
 
         const stdPct = (unc.std_probability * 100).toFixed(1);
         $("#metric-uncertainty").textContent = `±${stdPct}%`;
@@ -185,7 +192,18 @@
             $("#uncertainty-desc").style.color = "var(--red)";
         }
 
-        if (met.sensitivity > 0) {
+        // Third metric card: show per-class AUC for multi-label or sens/spec for binary
+        if (isMultilabel) {
+            const ckptMeta = met || {};
+            const meanAuc = ckptMeta.test_mean_auc || ckptMeta.auc_roc || 0;
+            if (meanAuc > 0) {
+                $("#metric-sens-spec").textContent = (meanAuc * 100).toFixed(1) + "%";
+                $("#metric-ppv-npv").textContent = "Mean AUC across 14 findings";
+            } else {
+                $("#metric-sens-spec").textContent = "—";
+                $("#metric-ppv-npv").textContent = "14-class multi-label model";
+            }
+        } else if (met && met.sensitivity > 0) {
             $("#metric-sens-spec").textContent =
                 `${(met.sensitivity * 100).toFixed(1)}% / ${(met.specificity * 100).toFixed(1)}%`;
             $("#metric-ppv-npv").textContent =
@@ -195,8 +213,49 @@
             $("#metric-ppv-npv").textContent = "Run calibrate.py for metrics";
         }
 
+        // --- Findings table (multi-label only) ---
+        let findingsSection = $("#findings-section");
+        if (isMultilabel && data.findings) {
+            if (!findingsSection) {
+                findingsSection = document.createElement("div");
+                findingsSection.id = "findings-section";
+                findingsSection.className = "findings-section";
+                // Insert after metrics row
+                const metricsRow = document.querySelector(".metrics-row");
+                metricsRow.parentNode.insertBefore(findingsSection, metricsRow.nextSibling);
+            }
+
+            findingsSection.style.display = "";
+            findingsSection.innerHTML = `
+                <h3>Detected Findings</h3>
+                <div class="findings-grid">
+                    ${data.findings.map((f) => {
+                        const pct = (f.probability * 100).toFixed(1);
+                        const uncPct = f.uncertainty ? (f.uncertainty * 100).toFixed(1) : "?";
+                        const statusClass = f.positive ? "finding-positive" : "finding-negative";
+                        const statusIcon = f.positive ? "▸" : "○";
+                        const barColor = f.positive
+                            ? (f.probability >= 0.8 ? "var(--red)" : f.probability >= 0.6 ? "var(--amber)" : "var(--blue)")
+                            : "var(--border-light)";
+                        return `
+                            <div class="finding-row ${statusClass}">
+                                <span class="finding-icon">${statusIcon}</span>
+                                <span class="finding-name">${f.display_name}</span>
+                                <div class="finding-bar-track">
+                                    <div class="finding-bar-fill" style="width: ${pct}%; background: ${barColor};"></div>
+                                </div>
+                                <span class="finding-pct">${pct}%</span>
+                                <span class="finding-unc">±${uncPct}%</span>
+                            </div>
+                        `;
+                    }).join("")}
+                </div>
+            `;
+        } else if (findingsSection) {
+            findingsSection.style.display = "none";
+        }
+
         // Image viewer
-        // Use the uploaded file as the original
         const reader = new FileReader();
         reader.onload = (e) => {
             $("#viewer-original").src = e.target.result;
@@ -233,7 +292,6 @@
                 <span class="zone-bar-value">${pct}%</span>
             `;
             zoneBarsEl.appendChild(row);
-            // Animate
             requestAnimationFrame(() => {
                 row.querySelector(".zone-bar-fill").style.width = pct + "%";
             });

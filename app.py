@@ -51,12 +51,14 @@ def load_model_on_startup() -> None:
     app.state.checkpoint = str(checkpoint_path.resolve())
 
     # Initialize the clinical analyzer
+    task = str(meta.get("task", "binary"))
     analyzer = ClinicalAnalyzer(
         model=model,
         model_name=str(meta["model_name"]),
         class_names=list(meta["class_names"]),
         image_size=int(meta["image_size"]),
         device=str(meta["device"]),
+        task=task,
     )
 
     # Load calibration if available

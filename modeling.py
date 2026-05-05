@@ -392,6 +392,7 @@ def load_checkpoint(checkpoint_path: str | Path, device: str = "auto") -> tuple[
         "image_size": image_size,
         "dropout": dropout,
         "device": resolved_device,
+        "task": checkpoint.get("metadata", {}).get("task", "binary"),
         "checkpoint_metadata": checkpoint.get("metadata", {}),
     }
     return model, metadata

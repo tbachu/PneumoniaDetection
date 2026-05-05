@@ -1,10 +1,13 @@
 """Clinical inference engine for chest X-ray analysis.
 
-Wraps the trained binary classifier with clinically meaningful output:
+Wraps the trained classifier with clinically meaningful output:
 - 5-level severity scoring
 - Calibrated confidence via temperature scaling
 - Uncertainty estimation via Monte Carlo Dropout
 - Lung region analysis from Grad-CAM heatmaps
+
+Supports both **binary** (NORMAL / PNEUMONIA) and **multi-label**
+(14 pathology) modes via the ``task`` parameter.
 """
 
 from __future__ import annotations
@@ -34,11 +37,41 @@ from modeling import (
 
 
 # ---------------------------------------------------------------------------
+# Constants — multi-label finding names
+# ---------------------------------------------------------------------------
+
+NIH_FINDINGS = [
+    "Atelectasis", "Cardiomegaly", "Effusion", "Infiltration",
+    "Mass", "Nodule", "Pneumonia", "Pneumothorax",
+    "Consolidation", "Edema", "Emphysema", "Fibrosis",
+    "Pleural_Thickening", "Hernia",
+]
+
+# Human-readable names for display
+_FINDING_DISPLAY = {
+    "Atelectasis": "Atelectasis",
+    "Cardiomegaly": "Cardiomegaly",
+    "Effusion": "Pleural Effusion",
+    "Infiltration": "Infiltration",
+    "Mass": "Mass",
+    "Nodule": "Nodule",
+    "Pneumonia": "Pneumonia",
+    "Pneumothorax": "Pneumothorax",
+    "Consolidation": "Consolidation",
+    "Edema": "Pulmonary Edema",
+    "Emphysema": "Emphysema",
+    "Fibrosis": "Fibrosis",
+    "Pleural_Thickening": "Pleural Thickening",
+    "Hernia": "Hernia",
+}
+
+
+# ---------------------------------------------------------------------------
 # Severity scoring
 # ---------------------------------------------------------------------------
 
 class SeverityLevel(IntEnum):
-    """Five-level severity scale for pneumonia findings."""
+    """Five-level severity scale for chest X-ray findings."""
     NEGATIVE = 1
     LOW = 2
     MODERATE = 3
@@ -50,9 +83,9 @@ class SeverityLevel(IntEnum):
 _SEVERITY_THRESHOLDS: list[tuple[float, SeverityLevel, str]] = [
     (0.20, SeverityLevel.NEGATIVE, "No significant findings"),
     (0.40, SeverityLevel.LOW, "Minimal/equivocal findings — consider clinical correlation"),
-    (0.60, SeverityLevel.MODERATE, "Findings suggestive of pneumonia — recommend follow-up"),
-    (0.80, SeverityLevel.HIGH, "Findings consistent with pneumonia"),
-    (1.01, SeverityLevel.CRITICAL, "High-confidence pneumonia — urgent review recommended"),
+    (0.60, SeverityLevel.MODERATE, "Findings suggestive of pathology — recommend follow-up"),
+    (0.80, SeverityLevel.HIGH, "Findings consistent with pathology"),
+    (1.01, SeverityLevel.CRITICAL, "High-confidence findings — urgent review recommended"),
 ]
 
 
@@ -65,16 +98,16 @@ class SeverityAssessment:
     pneumonia_probability: float
 
 
-def assess_severity(pneumonia_prob: float) -> SeverityAssessment:
-    """Map a pneumonia probability [0, 1] to a severity assessment."""
+def assess_severity(probability: float) -> SeverityAssessment:
+    """Map a probability [0, 1] to a severity assessment."""
     for threshold, level, description in _SEVERITY_THRESHOLDS:
-        if pneumonia_prob <= threshold:
+        if probability <= threshold:
             return SeverityAssessment(
                 level=level,
                 score=int(level),
                 label=level.name,
                 description=description,
-                pneumonia_probability=pneumonia_prob,
+                pneumonia_probability=probability,
             )
     # Fallback
     return SeverityAssessment(
@@ -82,7 +115,44 @@ def assess_severity(pneumonia_prob: float) -> SeverityAssessment:
         score=5,
         label="CRITICAL",
         description=_SEVERITY_THRESHOLDS[-1][2],
-        pneumonia_probability=pneumonia_prob,
+        pneumonia_probability=probability,
+    )
+
+
+def assess_severity_multilabel(
+    findings: list[dict[str, Any]],
+    max_prob: float,
+) -> SeverityAssessment:
+    """Assess overall severity from multiple findings.
+
+    Uses the maximum probability and number of positive findings to
+    determine the overall severity level.
+    """
+    n_positive = sum(1 for f in findings if f["positive"])
+
+    # Adjust severity: many findings at moderate confidence = still serious
+    effective_prob = max_prob
+    if n_positive >= 3:
+        effective_prob = min(1.0, max_prob + 0.15)
+    elif n_positive >= 2:
+        effective_prob = min(1.0, max_prob + 0.05)
+
+    sev = assess_severity(effective_prob)
+
+    # Override description for multi-label
+    if n_positive == 0:
+        desc = "No significant findings detected"
+    elif n_positive == 1:
+        desc = f"1 finding detected (max confidence {max_prob:.0%})"
+    else:
+        desc = f"{n_positive} findings detected (max confidence {max_prob:.0%})"
+
+    return SeverityAssessment(
+        level=sev.level,
+        score=sev.score,
+        label=sev.label,
+        description=desc,
+        pneumonia_probability=max_prob,
     )
 
 
@@ -194,6 +264,39 @@ def mc_dropout_inference(
         num_samples=num_samples,
         raw_probabilities=probabilities,
     )
+
+
+def mc_dropout_multilabel(
+    model: nn.Module,
+    input_tensor: torch.Tensor,
+    num_samples: int = 30,
+    num_classes: int = 14,
+) -> dict[str, Any]:
+    """MC Dropout for multi-label: returns mean and std per finding."""
+    model.train()
+
+    all_probs = []
+    with torch.no_grad():
+        for _ in range(num_samples):
+            logits = model(input_tensor)
+            probs = torch.sigmoid(logits)[0].cpu().numpy()
+            all_probs.append(probs)
+
+    model.eval()
+    all_probs_arr = np.array(all_probs)  # (num_samples, num_classes)
+    means = all_probs_arr.mean(axis=0)
+    stds = all_probs_arr.std(axis=0)
+
+    # Overall uncertainty = max std across positive findings (or all)
+    max_std = float(stds.max())
+
+    return {
+        "means": means.tolist(),
+        "stds": stds.tolist(),
+        "max_std": max_std,
+        "is_uncertain": max_std > _UNCERTAINTY_THRESHOLD,
+        "num_samples": num_samples,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -308,8 +411,26 @@ class ClinicalAnalysis:
     clinical_metrics: dict[str, float]
 
 
+@dataclass(frozen=True)
+class MultiLabelAnalysis:
+    """Complete clinical analysis result for multi-label detection."""
+    prediction: str                  # Top finding or "No Finding"
+    findings: list[dict[str, Any]]   # All 14 findings with probabilities
+    positive_findings: list[str]     # Names of positive findings
+    severity: SeverityAssessment
+    uncertainty: dict[str, Any]      # MC Dropout per-finding
+    regions: RegionAnalysis          # For the top finding
+    gradcam_overlay_b64: str
+    gradcam_raw_b64: str
+    model_info: dict[str, Any]
+    clinical_metrics: dict[str, Any]
+
+
 class ClinicalAnalyzer:
-    """End-to-end clinical analysis wrapping a trained pneumonia model.
+    """End-to-end clinical analysis wrapping a trained chest X-ray model.
+
+    Supports both binary (PNEUMONIA vs NORMAL) and multi-label (14 finding)
+    models. The ``task`` parameter controls the behavior.
 
     Usage::
 
@@ -326,6 +447,7 @@ class ClinicalAnalyzer:
         class_names: list[str],
         image_size: int,
         device: str,
+        task: str = "binary",
         temperature: float = 1.0,
         mc_samples: int = 30,
         clinical_metrics: dict[str, float] | None = None,
@@ -335,15 +457,22 @@ class ClinicalAnalyzer:
         self.class_names = class_names
         self.image_size = image_size
         self.device = device
+        self.task = task  # "binary" or "multilabel"
         self.temperature_scaler = TemperatureScaler(temperature)
         self.mc_samples = mc_samples
         self.clinical_metrics = clinical_metrics or _DEFAULT_CLINICAL_METRICS.copy()
 
-        # Resolve class indices
-        self.pneumonia_index = (
-            self.class_names.index("PNEUMONIA") if "PNEUMONIA" in self.class_names else 1
-        )
-        self.normal_index = 1 - self.pneumonia_index
+        if self.task == "binary":
+            # Resolve class indices
+            self.pneumonia_index = (
+                self.class_names.index("PNEUMONIA") if "PNEUMONIA" in self.class_names else 1
+            )
+            self.normal_index = 1 - self.pneumonia_index
+        else:
+            # Multi-label: class_names are finding names
+            self.pneumonia_index = (
+                self.class_names.index("Pneumonia") if "Pneumonia" in self.class_names else 6
+            )
 
     # -- calibration helpers ------------------------------------------------
 
@@ -370,13 +499,17 @@ class ClinicalAnalyzer:
 
     # -- main analysis ------------------------------------------------------
 
-    def analyze(self, image: Image.Image) -> ClinicalAnalysis:
+    def analyze(self, image: Image.Image) -> ClinicalAnalysis | MultiLabelAnalysis:
         """Run full clinical analysis on a single chest X-ray image.
 
-        Returns a *ClinicalAnalysis* dataclass with severity, uncertainty,
-        region analysis, Grad-CAM overlays, and the structured data needed
-        to generate a radiology-style report.
+        Dispatches to binary or multi-label analysis based on self.task.
         """
+        if self.task == "multilabel":
+            return self._analyze_multilabel(image)
+        return self._analyze_binary(image)
+
+    def _analyze_binary(self, image: Image.Image) -> ClinicalAnalysis:
+        """Binary analysis: PNEUMONIA vs NORMAL."""
         input_tensor = preprocess_pil_image(image, self.image_size).to(self.device)
 
         # 1. Standard inference with temperature-calibrated probabilities
@@ -433,6 +566,114 @@ class ClinicalAnalyzer:
                 "image_size": self.image_size,
                 "temperature": self.temperature_scaler.temperature,
                 "mc_samples": self.mc_samples,
+            },
+            clinical_metrics=self.clinical_metrics,
+        )
+
+    def _analyze_multilabel(self, image: Image.Image) -> MultiLabelAnalysis:
+        """Multi-label analysis: 14 chest pathologies."""
+        input_tensor = preprocess_pil_image(image, self.image_size).to(self.device)
+        threshold = 0.5
+
+        # 1. Inference with sigmoid probabilities
+        self.model.eval()
+        with torch.no_grad():
+            logits = self.model(input_tensor)
+            scaled_logits = self.temperature_scaler.scale(logits)
+            probs = torch.sigmoid(scaled_logits)[0].cpu().numpy()
+
+        # 2. Build per-finding results
+        findings: list[dict[str, Any]] = []
+        positive_names: list[str] = []
+
+        for i, name in enumerate(self.class_names):
+            prob = float(probs[i])
+            positive = prob >= threshold
+            if positive:
+                positive_names.append(name)
+            findings.append({
+                "name": name,
+                "display_name": _FINDING_DISPLAY.get(name, name),
+                "probability": round(prob, 4),
+                "positive": positive,
+            })
+
+        # Sort by probability descending
+        findings.sort(key=lambda f: f["probability"], reverse=True)
+
+        # Top finding for prediction label
+        if positive_names:
+            top_finding = findings[0]["display_name"]
+            prediction = f"{top_finding} (+{len(positive_names) - 1} more)" if len(positive_names) > 1 else top_finding
+        else:
+            prediction = "No Finding"
+
+        # Max probability for severity
+        max_prob = float(probs.max())
+
+        # 3. Severity based on overall picture
+        severity = assess_severity_multilabel(findings, max_prob)
+
+        # 4. MC Dropout uncertainty (per-finding)
+        uncertainty_data = mc_dropout_multilabel(
+            self.model,
+            input_tensor,
+            num_samples=self.mc_samples,
+            num_classes=len(self.class_names),
+        )
+
+        # Attach per-finding uncertainties
+        for i, name in enumerate(self.class_names):
+            for f in findings:
+                if f["name"] == name:
+                    f["uncertainty"] = round(uncertainty_data["stds"][i], 4)
+
+        # Build an UncertaintyEstimate-like for the overall result
+        # (Use the top finding's uncertainty for backward compat)
+        top_idx = int(np.argmax(probs))
+        uncertainty_compat = UncertaintyEstimate(
+            mean_probability=float(uncertainty_data["means"][top_idx]),
+            std_probability=float(uncertainty_data["stds"][top_idx]),
+            is_uncertain=uncertainty_data["is_uncertain"],
+            num_samples=uncertainty_data["num_samples"],
+            raw_probabilities=[],
+        )
+
+        # 5. Grad-CAM for the top positive finding (or highest-prob finding)
+        self.model.eval()
+        disable_inplace_relu(self.model)
+        target_layer = get_target_layer(self.model, self.model_name)
+        cam = GradCAM(self.model, target_layer)
+        try:
+            gradcam_class = int(np.argmax(probs))
+            heatmap, _ = cam.generate(input_tensor, class_index=gradcam_class)
+        finally:
+            cam.close()
+
+        regions = analyze_regions(heatmap)
+
+        # 6. Encode visualizations
+        overlay = blend_heatmap(image, heatmap, alpha=0.45)
+        overlay_b64 = encode_pil_to_base64(overlay)
+        raw_b64 = encode_pil_to_base64(heatmap_to_pil(heatmap))
+
+        return MultiLabelAnalysis(
+            prediction=prediction,
+            findings=findings,
+            positive_findings=positive_names,
+            severity=severity,
+            uncertainty=uncertainty_data,
+            regions=regions,
+            gradcam_overlay_b64=overlay_b64,
+            gradcam_raw_b64=raw_b64,
+            model_info={
+                "model_name": self.model_name,
+                "image_size": self.image_size,
+                "task": "multilabel",
+                "temperature": self.temperature_scaler.temperature,
+                "mc_samples": self.mc_samples,
+                "num_classes": len(self.class_names),
+                "gradcam_target": self.class_names[int(np.argmax(probs))],
             },
             clinical_metrics=self.clinical_metrics,
         )
